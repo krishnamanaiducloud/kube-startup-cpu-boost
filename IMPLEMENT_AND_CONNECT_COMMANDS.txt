@@ -1,0 +1,374 @@
+IMPLEMENT AND CONNECT kube-startup-cpu-boost + log-ingester + dashboard
+======================================================================
+
+Run these commands from PowerShell.
+
+Replace the registry value first. The registry must be reachable by your Kubernetes cluster.
+
+
+1. SET VARIABLES
+----------------
+
+cd D:\code\my-repos
+
+$Namespace = "kube-startup-cpu-boost-system"
+$DemoNamespace = "demo"
+
+$Registry = "ghcr.io/YOUR_ORG_OR_USERNAME"
+$ImageTag = "dev-$(Get-Date -Format yyyyMMddHHmmss)"
+
+$ControllerImageRepository = "${Registry}/kube-startup-cpu-boost"
+$ControllerImage = "${ControllerImageRepository}:${ImageTag}"
+
+$LogIngesterImage = "${Registry}/log-ingester:${ImageTag}"
+$DashboardImage = "${Registry}/startup-cpu-boost-dashboard:${ImageTag}"
+
+$DashboardServiceUrl = "http://boost-dashboard.${Namespace}.svc.cluster.local/api/boost-events"
+
+kubectl config current-context
+kubectl get nodes
+
+
+2. BUILD AND PUSH ALL IMAGES
+----------------------------
+
+cd D:\code\my-repos\dashboard-kube-startup-cpu-boost
+docker build -t "$DashboardImage" .
+docker push "$DashboardImage"
+
+cd D:\code\my-repos\log-ingester
+docker build -t "$LogIngesterImage" .
+docker push "$LogIngesterImage"
+
+cd D:\code\my-repos\kube-startup-cpu-boost
+docker build -t "$ControllerImage" .
+docker push "$ControllerImage"
+
+
+3. CREATE NAMESPACE
+-------------------
+
+kubectl create namespace $Namespace --dry-run=client -o yaml | kubectl apply -f -
+
+
+4. DEPLOY DASHBOARD
+-------------------
+
+@"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: boost-dashboard
+  namespace: $Namespace
+  labels:
+    app: boost-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: boost-dashboard
+  template:
+    metadata:
+      labels:
+        app: boost-dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: $DashboardImage
+        imagePullPolicy: Always
+        env:
+        - name: PORT
+          value: "8080"
+        - name: DATA_DIR
+          value: /data
+        - name: RETENTION_DAYS
+          value: "30"
+        ports:
+        - name: http
+          containerPort: 8080
+        volumeMounts:
+        - name: dashboard-data
+          mountPath: /data
+      volumes:
+      - name: dashboard-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: boost-dashboard
+  namespace: $Namespace
+  labels:
+    app: boost-dashboard
+spec:
+  selector:
+    app: boost-dashboard
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+"@ | kubectl apply -f -
+
+kubectl rollout status deployment/boost-dashboard -n $Namespace --timeout=180s
+
+
+5. DEPLOY LOG INGESTER
+----------------------
+
+The log-ingester tails kube-startup-cpu-boost controller logs and posts parsed events to the dashboard.
+
+@"
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: log-ingester
+  namespace: $Namespace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: log-ingester
+  namespace: $Namespace
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: log-ingester
+  namespace: $Namespace
+subjects:
+- kind: ServiceAccount
+  name: log-ingester
+  namespace: $Namespace
+roleRef:
+  kind: Role
+  name: log-ingester
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-ingester
+  namespace: $Namespace
+  labels:
+    app: log-ingester
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-ingester
+  template:
+    metadata:
+      labels:
+        app: log-ingester
+    spec:
+      serviceAccountName: log-ingester
+      containers:
+      - name: log-ingester
+        image: $LogIngesterImage
+        imagePullPolicy: Always
+        env:
+        - name: KSCB_NAMESPACE
+          value: $Namespace
+        - name: KSCB_CONTROLLER_LABEL_SELECTOR
+          value: control-plane=controller-manager
+        - name: KSCB_CONTROLLER_CONTAINER
+          value: manager
+        - name: DASHBOARD_URL
+          value: $DashboardServiceUrl
+        - name: TLS_ENABLED
+          value: "false"
+        - name: TLS_PORT
+          value: "8443"
+        - name: METRICS_ENABLED
+          value: "true"
+        - name: METRICS_PORT
+          value: "9090"
+        - name: LOG_SINCE_SECONDS
+          value: "0"
+        ports:
+        - name: health
+          containerPort: 8443
+        - name: metrics
+          containerPort: 9090
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-ingester
+  namespace: $Namespace
+  labels:
+    app: log-ingester
+spec:
+  selector:
+    app: log-ingester
+  ports:
+  - name: health
+    port: 8443
+    targetPort: 8443
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+"@ | kubectl apply -f -
+
+kubectl rollout status deployment/log-ingester -n $Namespace --timeout=180s
+
+
+6. INSTALL OR UPGRADE kube-startup-cpu-boost
+--------------------------------------------
+
+This installs the local Helm chart and uses the controller image built from D:\code\my-repos\kube-startup-cpu-boost.
+
+The dashboardEventUrl value connects the controller directly to the dashboard API.
+The log-ingester also runs and tails controller logs, so all three repos are deployed and connected.
+
+cd D:\code\my-repos\kube-startup-cpu-boost
+
+helm upgrade --install kube-startup-cpu-boost .\charts\kube-startup-cpu-boost `
+  -n $Namespace `
+  --create-namespace `
+  --set controllerManager.manager.image.repository="$ControllerImageRepository" `
+  --set controllerManager.manager.image.tag="$ImageTag" `
+  --set controllerManager.manager.env.dashboardEventUrl="$DashboardServiceUrl"
+
+kubectl rollout status deployment/kube-startup-cpu-boost-controller-manager -n $Namespace --timeout=180s
+
+
+7. VERIFY THE THREE SERVICES
+----------------------------
+
+kubectl get pods -n $Namespace -o wide
+kubectl get svc -n $Namespace
+
+kubectl logs -n $Namespace deploy/kube-startup-cpu-boost-controller-manager -c manager --tail=80
+kubectl logs -n $Namespace deploy/log-ingester --tail=80
+kubectl logs -n $Namespace deploy/boost-dashboard --tail=80
+
+
+8. CREATE A DEMO BOOST AND WORKLOAD
+-----------------------------------
+
+kubectl create namespace $DemoNamespace --dry-run=client -o yaml | kubectl apply -f -
+
+@"
+apiVersion: autoscaling.x-k8s.io/v1alpha1
+kind: StartupCPUBoost
+metadata:
+  name: demo-boost
+  namespace: $DemoNamespace
+selector:
+  matchLabels:
+    app: cpu-boost-demo
+spec:
+  resourcePolicy:
+    containerPolicies:
+    - containerName: app
+      percentageIncrease:
+        value: 100
+  durationPolicy:
+    fixedDuration:
+      unit: Seconds
+      value: 60
+"@ | kubectl apply -f -
+
+@"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-boost-demo
+  namespace: $DemoNamespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cpu-boost-demo
+  template:
+    metadata:
+      labels:
+        app: cpu-boost-demo
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.27
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+"@ | kubectl apply -f -
+
+kubectl rollout status deployment/cpu-boost-demo -n $DemoNamespace --timeout=180s
+
+
+9. WATCH EVENTS
+---------------
+
+kubectl logs -n $Namespace deploy/kube-startup-cpu-boost-controller-manager -c manager -f
+
+Open a second PowerShell window and run:
+
+kubectl port-forward -n $Namespace svc/boost-dashboard 8080:80
+
+Then open:
+
+http://localhost:8080
+
+Dashboard API checks:
+
+Invoke-RestMethod "http://localhost:8080/api/stats/summary"
+Invoke-RestMethod "http://localhost:8080/api/boosts?range=1h"
+
+
+10. RESTART DEMO WORKLOAD TO GENERATE MORE EVENTS
+-------------------------------------------------
+
+kubectl rollout restart deployment/cpu-boost-demo -n $DemoNamespace
+kubectl rollout status deployment/cpu-boost-demo -n $DemoNamespace --timeout=180s
+
+
+11. CLEAN UP
+------------
+
+kubectl delete namespace $DemoNamespace
+
+helm uninstall kube-startup-cpu-boost -n $Namespace
+kubectl delete deployment log-ingester boost-dashboard -n $Namespace
+kubectl delete service log-ingester boost-dashboard -n $Namespace
+kubectl delete rolebinding log-ingester -n $Namespace
+kubectl delete role log-ingester -n $Namespace
+kubectl delete serviceaccount log-ingester -n $Namespace
+kubectl delete namespace $Namespace
+
+
+NOTES
+-----
+
+1. If your registry is private, create an imagePullSecret and attach it to the namespace service accounts before installing.
+
+2. If you want only the log-ingester path, remove this Helm setting:
+   --set controllerManager.manager.env.dashboardEventUrl="$DashboardServiceUrl"
+
+3. If you want only the direct controller-to-dashboard path, scale log-ingester to zero:
+   kubectl scale deployment/log-ingester -n $Namespace --replicas=0
+
+4. The dashboard is exposed only by port-forward in this runbook. Add your Ingress, Gateway, Route, or Istio VirtualService after the service is working.
