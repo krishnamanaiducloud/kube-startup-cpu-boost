@@ -73,7 +73,7 @@ spec:
       containers:
       - command:
         - /manager
-        image: controller:latest
+        image: controller:dev
         name: manager
         securityContext:
           allowPrivilegeEscalation: false
