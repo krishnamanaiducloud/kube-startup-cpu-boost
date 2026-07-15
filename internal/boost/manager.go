@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/go-logr/logr"
@@ -122,6 +123,15 @@ type managerImpl struct {
 	regularBoosts namespacedObjects[StartupCPUBoost]
 	// orphanedPods is a collection of tracked pods that have no matching boost registered
 	orphanedPods namespacedObjects[*corev1.Pod]
+}
+
+var _ ctrlmanager.LeaderElectionRunnable = (*managerImpl)(nil)
+
+// NeedLeaderElection keeps the stateful policy/reversion loop active on
+// exactly one controller-manager replica. Admission webhooks use a separate
+// cache-backed resolver and do not depend on this runnable.
+func (m *managerImpl) NeedLeaderElection() bool {
+	return true
 }
 
 func NewManager(client client.Client) Manager {
@@ -276,12 +286,7 @@ func (m *managerImpl) setRunning(isRunning bool) {
 // getMatchingBoost finds the most specific matching boost for a given pod.
 func (m *managerImpl) getMatchingBoost(pod *corev1.Pod) (StartupCPUBoost, bool) {
 	namespaceBoosts := m.regularBoosts.List(pod.Namespace)
-	for _, boost := range namespaceBoosts {
-		if boost.Matches(pod) {
-			return boost, true
-		}
-	}
-	return nil, false
+	return SelectCPUBoostForPod(pod, namespaceBoosts)
 }
 
 // postProcessNewBoost performs additional post processing of a newly registered boost

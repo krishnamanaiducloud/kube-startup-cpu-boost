@@ -17,6 +17,7 @@ Note: this is not an officially supported Google product.
 
 * [Description](#description)
 * [Installation](#installation)
+  * [High availability and replicas](#high-availability-and-replicas)
 * [Usage](#usage)
 * [Features](#features)
   * [[Boost target] POD label selector](#boost-target-pod-label-selector)
@@ -95,6 +96,31 @@ gcloud container clusters create poc \
     --release-channel rapid \
     --region europe-central2
 ```
+
+### High availability and replicas
+
+The controller-manager supports one or more replicas when leader election is enabled (the default).
+Every Ready replica independently serves the validating and mutating webhooks from its synchronized
+Kubernetes cache. Reconciliation, boost tracking, and timed resource reversion remain active-standby:
+exactly one elected replica runs those stateful loops.
+
+An immediately deployable three-replica profile is included for both installers:
+
+```sh
+helm upgrade --install -n kube-startup-cpu-boost-system kube-startup-cpu-boost \
+  ./charts/kube-startup-cpu-boost -f ./charts/kube-startup-cpu-boost/values-ha.yaml
+kubectl apply -k config/ha
+```
+
+For other sizes, set Helm's `controllerManager.replicas` value or change the Kustomize `replicas`
+transformer. The base/default remains one replica for compatibility. The shipped rolling-update
+strategy keeps existing replicas available while a new replica synchronizes;
+the PodDisruptionBudget limits voluntary disruption to one replica, and best-effort topology spread favors
+different nodes and zones. A single replica remains supported but cannot provide failover availability.
+
+If multiple `StartupCPUBoost` resources match the same Pod, the selector with the most match clauses is
+chosen. Equally specific selectors are resolved by lexicographically ascending namespace and resource
+name, so every webhook and the elected reconciler make the same decision.
 
 ## Usage
 
@@ -209,7 +235,7 @@ Kube Startup CPU Boost operator can be configured with environmental variables.
 | --- | --- | --- | --- |
 | `POD_NAMESPACE` | `string` | `kube-startup-cpu-boost-system` |  Kube Startup CPU Boost operator namespace |
 | `MGR_CHECK_INTERVAL` | `int` | `5` | Duration in seconds between boost manager checks for time based boost duration policy |
-| `LEADER_ELECTION` | `bool` | `false` | Enables leader election for controller manager |
+| `LEADER_ELECTION` | `bool` | `true` | Enables leader election for controller manager |
 | `METRICS_PROBE_BIND_ADDR` | `string` | `:8080` | Address the metrics endpoint binds to |
 | `HEALTH_PROBE_BIND_ADDR` | `string` | `:8081` | Address the health probe endpoint binds to |
 | `SECURE_METRICS` | `bool` | `false` | Determines if the metrics endpoint is served securely |

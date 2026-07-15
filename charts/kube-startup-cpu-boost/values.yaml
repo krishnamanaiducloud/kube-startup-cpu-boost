@@ -23,6 +23,16 @@ controllerManager:
   podSecurityContext:
     runAsNonRoot: true
   replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  topologySpreadConstraints:
+    enabled: true
   tolerations: []
   serviceAccount:
     annotations: {}

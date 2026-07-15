@@ -10,6 +10,7 @@ metadata:
   {{- include "kube-startup-cpu-boost.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.controllerManager.replicas }}
+  strategy: {{- toYaml .Values.controllerManager.strategy | nindent 4 }}
   selector:
     matchLabels:
       control-plane: controller-manager
@@ -36,6 +37,23 @@ spec:
                 operator: In
                 values:
                 - linux
+      {{- if .Values.controllerManager.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            control-plane: controller-manager
+          {{- include "kube-startup-cpu-boost.selectorLabels" . | nindent 12 }}
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            control-plane: controller-manager
+          {{- include "kube-startup-cpu-boost.selectorLabels" . | nindent 12 }}
+      {{- end }}
       containers:
       - command:
         - /manager

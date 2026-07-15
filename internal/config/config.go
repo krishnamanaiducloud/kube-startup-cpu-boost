@@ -18,7 +18,7 @@ package config
 const (
 	PodNamespaceDefault           = "kube-startup-cpu-boost-system"
 	MgrCheckIntervalSecDefault    = 5
-	LeaderElectionDefault         = false
+	LeaderElectionDefault         = true
 	MetricsProbeBindAddrDefault   = ":8080"
 	HealthProbeBindAddrDefault    = ":8081"
 	SecureMetricsDefault          = false

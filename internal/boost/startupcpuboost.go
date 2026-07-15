@@ -96,6 +96,7 @@ type StartupCPUBoostImpl struct {
 	selector         labels.Selector
 	durationPolicies map[string]duration.Policy
 	resourcePolicies map[string]resource.ContainerPolicy
+	specificity      int
 	pods             map[string]*corev1.Pod
 	client           client.Client
 	stats            StartupCPUBoostStats
@@ -118,11 +119,16 @@ func NewStartupCPUBoost(client client.Client, boost *autoscaling.StartupCPUBoost
 		selector:         selector,
 		durationPolicies: mapDurationPolicy(boost.Spec.DurationPolicy),
 		resourcePolicies: resourcePolicies,
+		specificity:      len(boost.Selector.MatchLabels) + len(boost.Selector.MatchExpressions),
 		pods:             make(map[string]*corev1.Pod),
 		client:           client,
 		stats:            StartupCPUBoostStats{},
 		legacyRevertMode: legacyRevertMode,
 	}, nil
+}
+
+func (b *StartupCPUBoostImpl) selectorSpecificity() int {
+	return b.specificity
 }
 
 // Name returns startup-cpu-boost name
@@ -248,6 +254,7 @@ func (b *StartupCPUBoostImpl) UpdateFromSpec(ctx context.Context, boost *autosca
 	b.selector = selector
 	b.resourcePolicies = resourcePolicies
 	b.durationPolicies = mapDurationPolicy(boost.Spec.DurationPolicy)
+	b.specificity = len(boost.Selector.MatchLabels) + len(boost.Selector.MatchExpressions)
 	return nil
 }
 

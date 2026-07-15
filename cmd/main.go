@@ -137,40 +137,47 @@ func main() {
 
 	boostMgr := boost.NewManager(mgr.GetClient())
 	controllersReady := make(chan struct{})
-	go setupControllers(mgr, boostMgr, cfg, podLevelResourcesEnabled, versionInfo.GitVersion, certsReady,
-		controllersReady)
+	managerCtx := ctrl.SetupSignalHandler()
+	go setupControllers(managerCtx, mgr, boostMgr, cfg, podLevelResourcesEnabled,
+		versionInfo.GitVersion, certsReady, controllersReady)
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := setupReadyzCheck(mgr, boostMgr, controllersReady); err != nil {
+	if err := setupReadyzCheck(mgr, controllersReady); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
 	if err := mgr.Add(boostMgr); err != nil {
 		setupLog.Error(err, "unable to add boost manager to controller-runtime manager")
+		os.Exit(1)
 	}
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(managerCtx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
 }
 
-func setupControllers(mgr ctrl.Manager, boostMgr boost.Manager, cfg *config.Config,
+func setupControllers(ctx context.Context, mgr ctrl.Manager, boostMgr boost.Manager, cfg *config.Config,
 	podLevelResourcesEnabled bool, serverVersion string, certsReady chan struct{},
 	controllersReady chan struct{}) {
 	defer close(controllersReady)
 	setupLog.Info("Waiting for certificate generation to complete")
 	<-certsReady
 	setupLog.Info("Certificate generation has completed")
+	if _, err := mgr.GetCache().GetInformer(ctx, &autoscalingv1alpha1.StartupCPUBoost{}); err != nil {
+		setupLog.Error(err, "Unable to synchronize StartupCPUBoost cache")
+		os.Exit(1)
+	}
 
 	if failedWebhook, err := boostWebhook.Setup(mgr); err != nil {
 		setupLog.Error(err, "Unable to create webhook", "webhook", failedWebhook)
 		os.Exit(1)
 	}
-	cpuBoostWebHook := boostWebhook.NewPodCPUBoostWebHook(boostMgr, scheme, cfg.RemoveLimits,
-		podLevelResourcesEnabled)
+	podBoostResolver := boostWebhook.NewAPIPodBoostResolver(mgr.GetClient())
+	cpuBoostWebHook := boostWebhook.NewPodCPUBoostWebHookWithResolver(podBoostResolver, scheme,
+		cfg.RemoveLimits, podLevelResourcesEnabled)
 	mgr.GetWebhookServer().Register("/mutate-v1-pod", cpuBoostWebHook)
 	boostCtrl := &controller.StartupCPUBoostReconciler{
 		Client:  mgr.GetClient(),
@@ -186,9 +193,16 @@ func setupControllers(mgr ctrl.Manager, boostMgr boost.Manager, cfg *config.Conf
 	//+kubebuilder:scaffold:builder
 }
 
-func setupReadyzCheck(mgr ctrl.Manager, boostMgr boost.Manager,
-	controllersReadyChan chan struct{}) error {
-	if err := mgr.AddReadyzCheck("readyz", func(req *http.Request) error {
+type cacheSyncer interface {
+	WaitForCacheSync(context.Context) bool
+}
+
+func setupReadyzCheck(mgr ctrl.Manager, controllersReadyChan chan struct{}) error {
+	return mgr.AddReadyzCheck("readyz", replicaReadyCheck(mgr.GetCache(), controllersReadyChan))
+}
+
+func replicaReadyCheck(cache cacheSyncer, controllersReadyChan <-chan struct{}) healthz.Checker {
+	return func(req *http.Request) error {
 		controllersReady := false
 		select {
 		case <-controllersReadyChan:
@@ -196,17 +210,13 @@ func setupReadyzCheck(mgr ctrl.Manager, boostMgr boost.Manager,
 		default:
 		}
 		if !controllersReady {
-			return fmt.Errorf("controllers are not ready")
+			return fmt.Errorf("controllers and webhooks are not registered")
 		}
-		if !boostMgr.IsRunning(req.Context()) {
-			return fmt.Errorf("boost manager is not running")
+		if !cache.WaitForCacheSync(req.Context()) {
+			return fmt.Errorf("controller cache is not synchronized")
 		}
 		return nil
-	}); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
 	}
-	return nil
 }
 
 func getFeatureGates(clusterInfo util.ClusterInfo) (util.FeatureGates, error) {

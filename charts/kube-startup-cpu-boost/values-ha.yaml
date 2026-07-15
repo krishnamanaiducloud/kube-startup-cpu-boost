@@ -1,0 +1,4 @@
+# High-availability profile: all replicas serve admission webhooks while one
+# elected replica runs reconciliation and timed resource reversion.
+controllerManager:
+  replicas: 3

@@ -15,6 +15,12 @@
 namespace: kube-startup-cpu-boost-system
 namePrefix: kube-startup-cpu-boost-
 
+# Change count here, or run `kustomize edit set replicas controller-manager=N`,
+# to enable additional active webhook / standby reconciler replicas.
+replicas:
+- name: controller-manager
+  count: 1
+
 resources:
 - ../crd
 - ../rbac

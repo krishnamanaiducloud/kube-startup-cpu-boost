@@ -33,16 +33,24 @@ import (
 
 type podCPUBoostHandler struct {
 	decoder                  admission.Decoder
-	manager                  boost.Manager
+	resolver                 PodBoostResolver
 	removeLimits             bool
 	podLevelResourcesEnabled bool
 }
 
 func NewPodCPUBoostWebHook(mgr boost.Manager, scheme *runtime.Scheme, removeLimits bool,
 	podLevelResourcesEnabled bool) *webhook.Admission {
+	return NewPodCPUBoostWebHookWithResolver(&managerPodBoostResolver{manager: mgr}, scheme,
+		removeLimits, podLevelResourcesEnabled)
+}
+
+// NewPodCPUBoostWebHookWithResolver creates a mutating webhook whose policy
+// lookup can be served independently by every controller-manager replica.
+func NewPodCPUBoostWebHookWithResolver(resolver PodBoostResolver, scheme *runtime.Scheme,
+	removeLimits bool, podLevelResourcesEnabled bool) *webhook.Admission {
 	return &webhook.Admission{
 		Handler: &podCPUBoostHandler{
-			manager:                  mgr,
+			resolver:                 resolver,
 			decoder:                  admission.NewDecoder(scheme),
 			removeLimits:             removeLimits,
 			podLevelResourcesEnabled: podLevelResourcesEnabled,
@@ -59,7 +67,16 @@ func (h *podCPUBoostHandler) Handle(ctx context.Context, req admission.Request) 
 	log := ctrl.LoggerFrom(ctx).WithName("boost-pod-webhook")
 	log.V(5).Info("handling pod")
 
-	boostImpl, ok := h.manager.GetCPUBoostForPod(ctx, pod)
+	lookupPod := pod
+	if pod.Namespace == "" {
+		lookupPod = pod.DeepCopy()
+		lookupPod.Namespace = req.Namespace
+	}
+	boostImpl, ok, err := h.resolver.Resolve(ctx, lookupPod)
+	if err != nil {
+		log.Error(err, "failed to resolve StartupCPUBoost")
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
 	if !ok {
 		log.V(5).Info("no boost matched")
 		return admission.Allowed("no boost matched")
