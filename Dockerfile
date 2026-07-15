@@ -13,11 +13,15 @@
 # limitations under the License.
 
 # Build the manager binary
-FROM golang:1.26 AS builder
+ARG GO_IMAGE=golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian13:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
+
+FROM ${GO_IMAGE} AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
+RUN apk upgrade --no-cache
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
@@ -40,13 +44,14 @@ COPY internal/metrics/ internal/metrics/
 # was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
 # the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o manager cmd/main.go
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:nonroot
+FROM ${RUNTIME_IMAGE}
 WORKDIR /
 COPY --from=builder /workspace/manager .
+HEALTHCHECK NONE
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

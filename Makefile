@@ -15,7 +15,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= ghcr.io/google/kube-startup-cpu-boost
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.30.x
+ENVTEST_K8S_VERSION = 1.36.x
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -155,9 +155,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 STATICCHECK ?= $(LOCALBIN)/staticcheck
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.3.0
+KUSTOMIZE_VERSION ?= v5.8.1
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 STATICCHECK_VERSION ?= 2026.1
+HELMIFY_VERSION ?= v0.4.20
 
 KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"
 .PHONY: kustomize
@@ -192,7 +193,7 @@ HELMIFY ?= $(LOCALBIN)/helmify -original-name ${HELM_CHART_ROOT}
 .PHONY: helmify
 helmify: $(HELMIFY) ## Download helmify locally if necessary.
 $(HELMIFY): $(LOCALBIN)
-	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@latest
+	test -s $(LOCALBIN)/helmify || GOBIN=$(LOCALBIN) go install github.com/arttor/helmify/cmd/helmify@$(HELMIFY_VERSION)
 
 helm: manifests kustomize helmify
 	$(KUSTOMIZE) build . | $(HELMIFY)
