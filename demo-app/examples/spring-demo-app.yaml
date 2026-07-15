@@ -34,7 +34,10 @@ spec:
       serviceAccountName: spring-demo-app
       containers:
       - name: spring-demo-app
-        image: ghcr.io/google/spring-demo-app:latest
+        # Push the locally validated image to your registry and replace this
+        # reference before deploying to a remote Kubernetes/OpenShift cluster.
+        image: spring-demo-app:prod-07-15-2026
+        imagePullPolicy: IfNotPresent
         args:
         - --spring.config.location=file:/config/application.yaml
         env:
